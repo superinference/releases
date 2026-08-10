@@ -1,0 +1,66 @@
+name: Functional Tests
+
+on:
+  schedule:
+    - cron: '0 6 * * 0'   # weekly: Sunday 06:00 UTC
+  workflow_dispatch:        # manual trigger
+
+concurrency:
+  group: functional-tests
+  cancel-in-progress: true
+
+jobs:
+  functional-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Install AMI ──────────────────────────────────────────────────
+      - name: Install AMI
+        run: |
+          curl -fsSL https://www.superinference.org/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify install
+        run: ami --version
+
+      # ── Configure FRITO credentials ───────────────────────────────────
+      - name: Configure FRITO
+        env:
+          FRITO_JSON: ${{ secrets.AMI_FRITO }}
+        run: |
+          mkdir -p ~/.ami
+          printf '%s\n' "$FRITO_JSON" > ~/.ami/frito.json
+          chmod 600 ~/.ami/frito.json
+
+      - name: Show FRITO config (sanitized)
+        run: |
+          python3 -c "
+          import json
+          with open('$HOME/.ami/frito.json') as f:
+              c = json.load(f)
+          for p in c.get('providers', {}).values():
+              n = len(p.get('keys', []))
+              p['keys'] = ['[REDACTED]'] * n
+          print(json.dumps(c, indent=2))
+          "
+
+      # ── Run test suites ──────────────────────────────────────────────
+      - name: Run functional tests
+        env:
+          SKIP_INSTALL: "1"
+        run: |
+          chmod +x tests/run-all.sh
+          chmod +x tests/suites/*.sh
+          tests/run-all.sh
+
+      # ── Cleanup ──────────────────────────────────────────────────────
+      - name: Cleanup secrets
+        if: always()
+        run: |
+          rm -f ~/.ami/frito.json
+          rm -f /tmp/ami-scrub.sh
+          rm -rf /tmp/ami-test-workspace
